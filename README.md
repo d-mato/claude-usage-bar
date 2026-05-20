@@ -1,81 +1,86 @@
 # claude-usage-bar
 
-macOS のメニューバーに Claude Code の使用量（5時間セッション / 週次）を％表示する SwiftBar プラグイン。
+A SwiftBar plugin that shows your Claude Code usage (5-hour session and weekly) in the macOS menu bar as a percentage.
 
-```
-37% · 2h24m
-```
+![Menu bar](docs/menubar.png)
 
-- 左：現在の 5時間セッションでの使用率
-- 右：そのセッションがリセットされるまでの残り時間
+- Left: a donut chart of the current 5-hour session utilization
+- Middle: utilization as a percentage
+- Right: time remaining until that session resets
 
-クリックすると詳細（5時間セッションと週次の％、リセット時刻、モデル別週次など）が表示されます。70% でオレンジ、90% で赤に変色。
+Clicking the menu bar item reveals a dropdown with the 5-hour and weekly utilization, reset times, and per-model weekly breakdown. The text turns orange at 70% and red at 90%.
 
-## 仕組み
+![Dropdown](docs/dropdown.png)
 
-Claude Code 自身が `/usage` スラッシュコマンドで叩いている内部 API `https://api.anthropic.com/api/oauth/usage` を直接呼び出します。表示される値は `/usage` と完全一致します。
+## How it works
 
-- 認証：macOS Keychain に保存された Claude Code の OAuth アクセストークン（`Claude Code-credentials`）を `security` コマンドで取得
-- 集計：Anthropic 側でやってくれる（ローカル集計は不要）
-- 依存：`jq`, `curl`, `security`（標準で入っている）
+The plugin calls the same internal endpoint `https://api.anthropic.com/api/oauth/usage` that Claude Code's `/usage` slash command uses, so the numbers match `/usage` exactly.
+
+- **Auth**: reads the Claude Code OAuth access token from the macOS Keychain entry `Claude Code-credentials` via the `security` command.
+- **Aggregation**: done server-side by Anthropic — no local log parsing.
+- **Dependencies**: `jq`, `curl`, `security` (all standard on macOS once `jq` is installed).
 
 > [!NOTE]
-> `/api/oauth/usage` は公式の公開 API ではなく Claude Code が内部利用しているエンドポイントです。Claude Code のバージョンアップで仕様変更・廃止される可能性があります。
+> `/api/oauth/usage` is not a publicly documented API — it's an internal endpoint used by Claude Code. It may change or be removed in future Claude Code releases.
 
-## 必要なもの
+## Requirements
 
-- macOS（`security` コマンドが必要）
+- macOS (requires the `security` CLI)
 - Homebrew
-- Claude Code にログイン済みであること（OAuth トークンが Keychain に保存されている状態）
-- `jq`（`brew install jq`）
+- Logged into Claude Code (so the OAuth token is stored in the Keychain)
+- `jq` (`brew install jq`)
 
-## セットアップ
+## Setup
 
 ```sh
 brew install --cask swiftbar
 brew install jq
 
-# このリポジトリを任意の場所に clone
-git clone <this-repo> ~/Projects/claude-usage-bar
+# Clone this repo anywhere
+git clone https://github.com/d-mato/claude-usage-bar ~/Projects/claude-usage-bar
 chmod +x ~/Projects/claude-usage-bar/claude-usage.5m.sh
 
-# SwiftBar のプラグインフォルダを設定
+# Point SwiftBar at the plugin folder
 defaults write com.ameba.SwiftBar PluginDirectory "$HOME/Projects/claude-usage-bar"
 open -a SwiftBar
 ```
 
-### 初回起動時の Keychain 許可ダイアログ
+### First-run Keychain prompt
 
-SwiftBar が初めてこのプラグインを実行すると、macOS から以下のようなダイアログが出ます：
+The first time SwiftBar runs the plugin, macOS will show a dialog like:
 
-> 「SwiftBar」が、キーチェーン項目"Claude Code-credentials"にアクセスしようとしています。
+> "SwiftBar" wants to access the keychain item "Claude Code-credentials".
 
-**「常に許可」** をクリックしてください。1回許可すれば以降は出ません。「許可」だけだと毎回ダイアログが出るので注意。
+Click **Always Allow**. Choosing **Allow** alone will re-prompt every refresh.
 
-## 表示形式
+## Display
 
-| 場所 | 内容 |
+| Location | Content |
 |---|---|
-| メニューバー | `37% · 2h24m`（5時間セッションの使用率＋残り時間） |
-| ドロップダウン | 5h セッション・週次（全モデル/Opus/Sonnet）の％とリセット時刻 |
+| Menu bar | `37% · 2h24m` (5-hour session utilization + time remaining) |
+| Dropdown | 5-hour session and weekly utilization (all models / Opus / Sonnet), reset times |
 
-## トラブルシュート
+## Troubleshooting
 
-- **メニューバーに `Claude ⚠️` が出る**：ドロップダウンを開いてエラーメッセージを確認。多くの場合は Keychain 拒否か、トークン期限切れ。
-- **`OAuth token expired`**：ターミナルで `claude` を起動して再ログイン。
-- **`Keychain access denied`**：Keychain Access.app で `Claude Code-credentials` を選択し、アクセス制御タブで SwiftBar を許可リストに追加。
-- **数値が古い**：メニュー > Refresh、または 5分待つ。`5m` 部分（ファイル名）を `1m` 等にリネームすれば更新間隔が変わる。
+- **`Claude ⚠️` in the menu bar**: open the dropdown to see the error. Usually it's a Keychain denial or an expired token.
+- **`OAuth token expired`**: run `claude` in a terminal to re-login.
+- **`Keychain access denied`**: open Keychain Access.app, find `Claude Code-credentials`, and add SwiftBar to the Access Control list.
+- **Stale numbers**: pick Refresh from the menu, or wait 5 minutes. To change the refresh interval, rename the `5m` part of the filename (e.g. to `1m`).
 
-## 設定（任意）
+## Configuration (optional)
 
 ```sh
 mkdir -p ~/.config/claude-usage-bar
 cp _config.sh.example ~/.config/claude-usage-bar/config.sh
 ```
 
-`KEYCHAIN_ACCOUNT` を上書きすれば、`whoami` と異なるアカウント名で Keychain に保存されている場合に対応できます。
+Override `KEYCHAIN_ACCOUNT` if your macOS login name differs from the account Claude Code stored its credentials under (defaults to `whoami`).
 
-## 過去バージョン
+## Version history
 
-- **v0.1**: `ccusage` 経由でローカルログを集計していた版。値が公式 `/usage` と数十%ずれるため廃止。
-- **v0.2**: 公式 `/api/oauth/usage` 直叩きに刷新。
+- **v0.1**: aggregated local logs via `ccusage`. Retired because its numbers drifted tens of percent from the official `/usage`.
+- **v0.2**: switched to calling the official `/api/oauth/usage` endpoint directly.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
