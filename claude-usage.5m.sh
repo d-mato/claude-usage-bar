@@ -3,7 +3,7 @@
 # <bitbar.version>v0.2.0</bitbar.version>
 # <bitbar.author>daiki</bitbar.author>
 # <bitbar.desc>Shows Claude Code usage (5-hour block and weekly) in the menu bar by calling /api/oauth/usage.</bitbar.desc>
-# <bitbar.dependencies>jq,security,curl</bitbar.dependencies>
+# <bitbar.dependencies>jq,security,curl,python3</bitbar.dependencies>
 
 set -u
 
@@ -28,6 +28,7 @@ emit_error() {
 command -v jq       >/dev/null 2>&1 || emit_error "jq not found"
 command -v security >/dev/null 2>&1 || emit_error "security CLI not found"
 command -v curl     >/dev/null 2>&1 || emit_error "curl not found"
+command -v python3  >/dev/null 2>&1 || emit_error "python3 not found"
 
 CRED_JSON="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$KEYCHAIN_ACCOUNT" -w 2>/dev/null)" \
     || emit_error "Keychain access denied or no entry for $KEYCHAIN_SERVICE/$KEYCHAIN_ACCOUNT"
@@ -125,15 +126,86 @@ ascii_bar() {
         print bar;
     }'
 }
+
+# Return "R G B" integers matching color_for_pct thresholds.
+pct_rgb() {
+    if   [ "$1" -ge 90 ]; then echo "220 50 50"
+    elif [ "$1" -ge 70 ]; then echo "220 130 0"
+    else                       echo "65 125 240"
+    fi
+}
+
+# Generate a Retina-aware RGBA PNG donut chart as base64.
+# The PNG is rendered at 2× pixel density and tagged with a pHYs chunk declaring
+# 144 DPI, so NSImage treats it as @2x (logical size = SIZE/2 pt, sharp on Retina).
+# Args: pct(0-100)  r g b
+donut_b64() {
+    python3 - "$1" "$2" "$3" "$4" <<'PYEOF'
+import math, struct, zlib, base64, sys
+
+pct = max(0.0, min(100.0, float(sys.argv[1])))
+cr, cg, cb = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+
+# 44 px → 22 pt logical size at @2x (matches menu bar height).
+SIZE, SS = 44, 2
+cx = cy = SIZE / 2.0
+R_OUT = SIZE / 2.0 - 2.0
+R_IN  = R_OUT * 0.5  # ring thickness = 50% of outer radius
+used  = (cr, cg, cb, 255)
+empty = (185, 190, 200, 200)
+
+rows = []
+for y in range(SIZE):
+    row = []
+    for x in range(SIZE):
+        acc = [0, 0, 0, 0]
+        for sy in range(SS):
+            for sx in range(SS):
+                dx = x - cx + (sx + 0.5) / SS
+                dy = y - cy + (sy + 0.5) / SS
+                d  = math.sqrt(dx * dx + dy * dy)
+                if R_IN <= d <= R_OUT:
+                    ang = math.atan2(dx, -dy)
+                    if ang < 0:
+                        ang += 2 * math.pi
+                    px = used if ang <= 2 * math.pi * pct / 100.0 else empty
+                else:
+                    px = (0, 0, 0, 0)
+                for i in range(4):
+                    acc[i] += px[i]
+        row.extend(v // (SS * SS) for v in acc)
+    rows.append(bytes(row))
+
+def chunk(tag, data):
+    body = tag + data
+    return struct.pack('>I', len(data)) + body + struct.pack('>I', zlib.crc32(body) & 0xffffffff)
+
+ihdr = struct.pack('>IIBBBBB', SIZE, SIZE, 8, 6, 0, 0, 0)
+# pHYs: 5669 px/m ≈ 144 DPI on both axes, unit=1 (meter) → NSImage treats as @2x.
+phys = chunk(b'pHYs', struct.pack('>IIB', 5669, 5669, 1))
+idat = zlib.compress(b''.join(b'\x00' + r for r in rows))
+png  = (b'\x89PNG\r\n\x1a\n'
+        + chunk(b'IHDR', ihdr)
+        + phys
+        + chunk(b'IDAT', idat)
+        + chunk(b'IEND', b''))
+print(base64.b64encode(png).decode())
+PYEOF
+}
+
 FIVE_COLOR=$(color_for_pct "$FIVE_INT")
 WEEK_COLOR=$(color_for_pct "$WEEK_INT")
 
-# --- Menu bar title ---
+# Generate the donut chart for the menu bar icon (5-hour utilization).
+# shellcheck disable=SC2046
+FIVE_DONUT=$(donut_b64 "$FIVE_INT" $(pct_rgb "$FIVE_INT"))
+
+# --- Menu bar title (donut icon + text) ---
 TITLE="${FIVE_INT}% · ${FIVE_REMAIN_TXT}"
 if [ -n "$FIVE_COLOR" ]; then
-    echo "$TITLE | color=$FIVE_COLOR"
+    echo "$TITLE | image=${FIVE_DONUT} color=$FIVE_COLOR"
 else
-    echo "$TITLE"
+    echo "$TITLE | image=${FIVE_DONUT}"
 fi
 
 echo "---"
