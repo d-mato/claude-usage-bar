@@ -57,6 +57,8 @@ WEEK_PCT="$(echo "$RESP" | jq -r '.seven_day.utilization // 0')"
 WEEK_RESET="$(echo "$RESP" | jq -r '.seven_day.resets_at // empty')"
 WEEK_SONNET_PCT="$(echo "$RESP" | jq -r '.seven_day_sonnet.utilization // 0')"
 WEEK_OPUS_PCT="$(echo "$RESP" | jq -r '.seven_day_opus.utilization // 0')"
+WEEK_DESIGN_PCT="$(echo "$RESP" | jq -r '.seven_day_omelette.utilization // 0')"
+WEEK_DESIGN_RESET="$(echo "$RESP" | jq -r '.seven_day_omelette.resets_at // empty')"
 
 # Utilizations are already 0-100 percentages. Coerce to ints for display.
 round_int() {
@@ -66,6 +68,7 @@ FIVE_INT=$(round_int "$FIVE_PCT")
 WEEK_INT=$(round_int "$WEEK_PCT")
 WEEK_SONNET_INT=$(round_int "$WEEK_SONNET_PCT")
 WEEK_OPUS_INT=$(round_int "$WEEK_OPUS_PCT")
+WEEK_DESIGN_INT=$(round_int "$WEEK_DESIGN_PCT")
 
 # Seconds until ISO timestamp.
 secs_until_iso() {
@@ -100,6 +103,7 @@ FIVE_REMAIN_SECS=$(secs_until_iso "$FIVE_RESET")
 FIVE_REMAIN_TXT=$(fmt_remain_from_secs "$FIVE_REMAIN_SECS")
 FIVE_RESET_TIME=$(iso_to_local "$FIVE_RESET" "%H:%M")
 WEEK_RESET_TXT=$(iso_to_local "$WEEK_RESET" "%-m月%-d日 %H:%M")
+WEEK_DESIGN_RESET_TXT=$(iso_to_local "$WEEK_DESIGN_RESET" "%-m月%-d日 %H:%M")
 
 color_for_pct() {
     awk -v p="$1" 'BEGIN {
@@ -131,7 +135,7 @@ else
 fi
 
 echo "---"
-echo "Claude Code Usage | size=11"
+echo "Claude Usage | size=11"
 echo "---"
 
 # 5-hour block
@@ -155,6 +159,15 @@ fi
 if [ "$WEEK_SONNET_INT" -gt 0 ]; then
     echo "Week (Sonnet only)"
     echo "  $(ascii_bar "$WEEK_SONNET_INT") ${WEEK_SONNET_INT}% | font=Menlo color=gray"
+fi
+
+if [ -n "$WEEK_DESIGN_RESET" ]; then
+    echo "---"
+    echo "Claude Design — resets ${WEEK_DESIGN_RESET_TXT}"
+    DC_OPT=""
+    DC=$(color_for_pct "$WEEK_DESIGN_INT")
+    [ -n "$DC" ] && DC_OPT=" color=$DC"
+    echo "  $(ascii_bar "$WEEK_DESIGN_INT") ${WEEK_DESIGN_INT}% |${DC_OPT} font=Menlo"
 fi
 
 echo "---"
