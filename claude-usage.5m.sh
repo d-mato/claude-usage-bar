@@ -56,7 +56,9 @@ FIVE_RESET="$(echo "$RESP" | jq -r '.five_hour.resets_at // empty')"
 WEEK_PCT="$(echo "$RESP" | jq -r '.seven_day.utilization // 0')"
 WEEK_RESET="$(echo "$RESP" | jq -r '.seven_day.resets_at // empty')"
 WEEK_SONNET_PCT="$(echo "$RESP" | jq -r '.seven_day_sonnet.utilization // 0')"
+WEEK_SONNET_PRESENT="$(echo "$RESP" | jq -r 'if .seven_day_sonnet == null then "0" else "1" end')"
 WEEK_OPUS_PCT="$(echo "$RESP" | jq -r '.seven_day_opus.utilization // 0')"
+WEEK_OPUS_PRESENT="$(echo "$RESP" | jq -r 'if .seven_day_opus == null then "0" else "1" end')"
 WEEK_DESIGN_PCT="$(echo "$RESP" | jq -r '.seven_day_omelette.utilization // 0')"
 WEEK_DESIGN_RESET="$(echo "$RESP" | jq -r '.seven_day_omelette.resets_at // empty')"
 
@@ -152,11 +154,11 @@ WC_OPT=""
 [ -n "$WEEK_COLOR" ] && WC_OPT=" color=$WEEK_COLOR"
 echo "  $(ascii_bar "$WEEK_INT") ${WEEK_INT}% |${WC_OPT} font=Menlo"
 
-if [ "$WEEK_OPUS_INT" -gt 0 ]; then
+if [ "$WEEK_OPUS_PRESENT" = "1" ]; then
     echo "Week (Opus only)"
     echo "  $(ascii_bar "$WEEK_OPUS_INT") ${WEEK_OPUS_INT}% | font=Menlo color=gray"
 fi
-if [ "$WEEK_SONNET_INT" -gt 0 ]; then
+if [ "$WEEK_SONNET_PRESENT" = "1" ]; then
     echo "Week (Sonnet only)"
     echo "  $(ascii_bar "$WEEK_SONNET_INT") ${WEEK_SONNET_INT}% | font=Menlo color=gray"
 fi
