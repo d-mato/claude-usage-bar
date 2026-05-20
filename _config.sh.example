@@ -1,9 +1,0 @@
-# Claude Usage Bar — optional user config
-# Copy to ~/.config/claude-usage-bar/config.sh to override defaults.
-#
-# v0.2 では公式エンドポイント /api/oauth/usage を直接叩くため、トークン上限値の
-# キャリブレーションは不要になりました。残っているのは Keychain アカウント名だけ。
-
-# Keychain account used by Claude Code. Defaults to `whoami`. Override if your
-# macOS login name differs from the account Claude Code stored credentials as.
-# KEYCHAIN_ACCOUNT="daiki"

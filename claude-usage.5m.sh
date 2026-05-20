@@ -16,9 +16,6 @@ KEYCHAIN_SERVICE="Claude Code-credentials"
 KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-$(whoami)}"
 USAGE_URL="https://api.anthropic.com/api/oauth/usage"
 
-CONFIG_FILE="${CLAUDE_USAGE_BAR_CONFIG:-$HOME/.config/claude-usage-bar/config.sh}"
-[ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
-
 emit_error() {
     echo "Claude ⚠️"
     echo "---"
@@ -247,7 +244,5 @@ if [ -n "$WEEK_DESIGN_RESET" ]; then
 fi
 
 echo "---"
-EDITOR_CMD="${VISUAL:-${EDITOR:-/usr/bin/open}}"
-echo "Edit config | bash=\"$EDITOR_CMD\" param1=\"$CONFIG_FILE\" terminal=false"
 echo "Open claude.ai usage | href=https://claude.ai/settings/usage"
 echo "Refresh | refresh=true"

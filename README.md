@@ -73,15 +73,6 @@ Click **Always Allow**. Choosing **Allow** alone will re-prompt every refresh.
 - **`Keychain access denied`**: open Keychain Access.app, find `Claude Code-credentials`, and add SwiftBar to the Access Control list.
 - **Stale numbers**: pick Refresh from the menu, or wait 5 minutes. To change the refresh interval, rename the `5m` part of the filename (e.g. to `1m`).
 
-## Configuration (optional)
-
-```sh
-mkdir -p ~/.config/claude-usage-bar
-cp _config.sh.example ~/.config/claude-usage-bar/config.sh
-```
-
-Override `KEYCHAIN_ACCOUNT` if your macOS login name differs from the account Claude Code stored its credentials under (defaults to `whoami`).
-
 ## Version history
 
 - **v0.1**: aggregated local logs via `ccusage`. Retired because its numbers drifted tens of percent from the official `/usage`.
