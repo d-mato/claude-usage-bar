@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import locale
 import os
 import time
 import unittest
@@ -129,6 +130,17 @@ class DonutB64Tests(unittest.TestCase):
 
 
 class MainOutputTests(_TzFixed, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # main() calls setlocale(LC_TIME, ""); mirror it here so expected
+        # values computed with strftime match what main() will produce.
+        self._orig_locale = locale.setlocale(locale.LC_TIME)
+        locale.setlocale(locale.LC_TIME, "")
+
+    def tearDown(self):
+        locale.setlocale(locale.LC_TIME, self._orig_locale)
+        super().tearDown()
+
     def _run_main(self, resp, *, expires_at_ms=2 ** 63 - 1, now=None):
         if now is None:
             now = datetime(2026, 5, 19, 22, 6, tzinfo=timezone.utc)
@@ -154,12 +166,15 @@ class MainOutputTests(_TzFixed, unittest.TestCase):
             "seven_day_omelette": {"utilization": 37.4, "resets_at": "2026-05-23T00:00:00Z"},
         }
         out = self._run_main(resp)
+        # Reset date is rendered via the user's LC_TIME, so build the
+        # expectation through strftime instead of hard-coding a format.
+        week_reset = datetime(2026, 5, 23, 9, 0).strftime("%x %H:%M")
         self.assertIn("7% · 3h44m | image=", out)
         self.assertIn("5-hour session — resets 10:50 (3h44m left)", out)
-        self.assertIn("Week (all models) — resets 5月23日 09:00", out)
+        self.assertIn(f"Week (all models) — resets {week_reset}", out)
         self.assertIn("Week (Sonnet only)", out)
         self.assertNotIn("Week (Opus only)", out)
-        self.assertIn("Claude Design — resets 5月23日 09:00", out)
+        self.assertIn(f"Claude Design — resets {week_reset}", out)
         self.assertIn("Open claude.ai usage | href=https://claude.ai/settings/usage", out)
         self.assertIn("Refresh | refresh=true", out)
 

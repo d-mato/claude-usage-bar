@@ -10,6 +10,7 @@
 import base64
 import getpass
 import json
+import locale
 import math
 import os
 import struct
@@ -183,6 +184,12 @@ def bar_line(p_int, color):
 
 
 def main():
+    # Pick up the user's LC_TIME so %x renders in their locale's date format.
+    try:
+        locale.setlocale(locale.LC_TIME, "")
+    except locale.Error:
+        pass
+
     cred = keychain_credentials()
     oauth = cred.get("claudeAiOauth") or {}
     token = oauth.get("accessToken")
@@ -217,8 +224,8 @@ def main():
     five_remain_secs = int((five_reset_dt - now_utc).total_seconds()) if five_reset_dt else 0
     five_remain_txt = fmt_remain(five_remain_secs)
     five_reset_time = iso_to_local(five_reset, "%H:%M")
-    week_reset_txt = iso_to_local(week_reset, "%-m月%-d日 %H:%M")
-    week_design_reset_txt = iso_to_local(week_design_reset, "%-m月%-d日 %H:%M")
+    week_reset_txt = iso_to_local(week_reset, "%x %H:%M")
+    week_design_reset_txt = iso_to_local(week_design_reset, "%x %H:%M")
 
     five_color = color_for_pct(five_int)
     week_color = color_for_pct(week_int)
