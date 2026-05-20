@@ -108,6 +108,17 @@ color_for_pct() {
         else print "";
     }'
 }
+ascii_bar() {
+    awk -v p="$1" -v w=20 'BEGIN {
+        if (p < 0) p = 0; if (p > 100) p = 100;
+        filled = int(p * w / 100 + 0.5);
+        bar = "[";
+        for (i = 0; i < filled; i++) bar = bar "█";
+        for (i = filled; i < w; i++) bar = bar "░";
+        bar = bar "]";
+        print bar;
+    }'
+}
 FIVE_COLOR=$(color_for_pct "$FIVE_INT")
 WEEK_COLOR=$(color_for_pct "$WEEK_INT")
 
@@ -127,7 +138,7 @@ echo "---"
 echo "5-hour session — resets ${FIVE_RESET_TIME} (${FIVE_REMAIN_TXT} left)"
 FC_OPT=""
 [ -n "$FIVE_COLOR" ] && FC_OPT=" color=$FIVE_COLOR"
-echo "  ${FIVE_INT}% used |${FC_OPT} font=Menlo"
+echo "  $(ascii_bar "$FIVE_INT") ${FIVE_INT}% |${FC_OPT} font=Menlo"
 
 echo "---"
 
@@ -135,15 +146,15 @@ echo "---"
 echo "Week (all models) — resets ${WEEK_RESET_TXT}"
 WC_OPT=""
 [ -n "$WEEK_COLOR" ] && WC_OPT=" color=$WEEK_COLOR"
-echo "  ${WEEK_INT}% used |${WC_OPT} font=Menlo"
+echo "  $(ascii_bar "$WEEK_INT") ${WEEK_INT}% |${WC_OPT} font=Menlo"
 
 if [ "$WEEK_OPUS_INT" -gt 0 ]; then
     echo "Week (Opus only)"
-    echo "  ${WEEK_OPUS_INT}% used | font=Menlo color=gray"
+    echo "  $(ascii_bar "$WEEK_OPUS_INT") ${WEEK_OPUS_INT}% | font=Menlo color=gray"
 fi
 if [ "$WEEK_SONNET_INT" -gt 0 ]; then
     echo "Week (Sonnet only)"
-    echo "  ${WEEK_SONNET_INT}% used | font=Menlo color=gray"
+    echo "  $(ascii_bar "$WEEK_SONNET_INT") ${WEEK_SONNET_INT}% | font=Menlo color=gray"
 fi
 
 echo "---"
