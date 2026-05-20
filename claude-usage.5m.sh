@@ -4,6 +4,8 @@
 # <bitbar.author>daiki</bitbar.author>
 # <bitbar.desc>Shows Claude Code usage (5-hour block and weekly) in the menu bar by calling /api/oauth/usage.</bitbar.desc>
 # <bitbar.dependencies>jq,security,curl,python3</bitbar.dependencies>
+# <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
+# <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 
 set -u
 
