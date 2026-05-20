@@ -1,12 +1,9 @@
-# Claude Usage Bar — user config
-# Copy to ~/.config/claude-usage-bar/config.sh and tune for your plan.
+# Claude Usage Bar — optional user config
+# Copy to ~/.config/claude-usage-bar/config.sh to override defaults.
 #
-# Anthropic does not publish exact token caps; these are community-observed
-# ceilings for the Claude Max ($100) plan. Watch your bar over a few days and
-# adjust so 100% matches the point where Claude Code actually rate-limits you.
+# v0.2 では公式エンドポイント /api/oauth/usage を直接叩くため、トークン上限値の
+# キャリブレーションは不要になりました。残っているのは Keychain アカウント名だけ。
 
-# 5-hour block token ceiling
-BLOCK_TOKEN_LIMIT=220000000   # 220M
-
-# Weekly token ceiling
-WEEKLY_TOKEN_LIMIT=1000000000 # 1B
+# Keychain account used by Claude Code. Defaults to `whoami`. Override if your
+# macOS login name differs from the account Claude Code stored credentials as.
+# KEYCHAIN_ACCOUNT="daiki"
