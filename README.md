@@ -40,10 +40,16 @@ brew install jq
 git clone https://github.com/d-mato/claude-usage-bar ~/Projects/claude-usage-bar
 chmod +x ~/Projects/claude-usage-bar/claude-usage.5m.sh
 
-# Point SwiftBar at the plugin folder
-defaults write com.ameba.SwiftBar PluginDirectory "$HOME/Projects/claude-usage-bar"
+# Launch SwiftBar and pick a Plugin Folder when prompted
+# (existing users: skip this — your Plugin Folder is already set)
 open -a SwiftBar
+
+# Symlink the script into your SwiftBar Plugin Folder
+ln -s ~/Projects/claude-usage-bar/claude-usage.5m.sh \
+      "$(defaults read com.ameba.SwiftBar PluginDirectory)/"
 ```
+
+The symlink approach lets `git pull` update the plugin in place and keeps the script next to other SwiftBar plugins you may already have.
 
 ### First-run Keychain prompt
 
