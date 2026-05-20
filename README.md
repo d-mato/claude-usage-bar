@@ -18,34 +18,32 @@ The plugin calls the same internal endpoint `https://api.anthropic.com/api/oauth
 
 - **Auth**: reads the Claude Code OAuth access token from the macOS Keychain entry `Claude Code-credentials` via the `security` command.
 - **Aggregation**: done server-side by Anthropic — no local log parsing.
-- **Dependencies**: `jq`, `curl`, `security` (all standard on macOS once `jq` is installed).
+- **Dependencies**: `python3`, `security` (both standard on macOS once Xcode Command Line Tools are installed).
 
 > [!NOTE]
 > `/api/oauth/usage` is not a publicly documented API — it's an internal endpoint used by Claude Code. It may change or be removed in future Claude Code releases.
 
 ## Requirements
 
-- macOS (requires the `security` CLI)
+- macOS (requires the `security` CLI and `python3` from Xcode Command Line Tools)
 - Homebrew
 - Logged into Claude Code (so the OAuth token is stored in the Keychain)
-- `jq` (`brew install jq`)
 
 ## Setup
 
 ```sh
 brew install --cask swiftbar
-brew install jq
 
 # Clone this repo anywhere
 git clone https://github.com/d-mato/claude-usage-bar ~/Projects/claude-usage-bar
-chmod +x ~/Projects/claude-usage-bar/claude-usage.5m.sh
+chmod +x ~/Projects/claude-usage-bar/claude-usage.5m.py
 
 # Launch SwiftBar and pick a Plugin Folder when prompted
 # (existing users: skip this — your Plugin Folder is already set)
 open -a SwiftBar
 
 # Symlink the script into your SwiftBar Plugin Folder
-ln -s ~/Projects/claude-usage-bar/claude-usage.5m.sh \
+ln -s ~/Projects/claude-usage-bar/claude-usage.5m.py \
       "$(defaults read com.ameba.SwiftBar PluginDirectory)/"
 ```
 
