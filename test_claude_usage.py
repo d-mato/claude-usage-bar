@@ -119,6 +119,37 @@ class GetTests(unittest.TestCase):
         self.assertIsNone(claude_usage.get({"a": "x"}, "a.b"))
 
 
+class UsageFromHeadersTests(unittest.TestCase):
+    def test_typical_headers(self):
+        headers = {
+            "anthropic-ratelimit-unified-5h-utilization": "0.07",
+            "anthropic-ratelimit-unified-5h-reset": "1784275200",
+            "anthropic-ratelimit-unified-7d-utilization": "0.17",
+            "anthropic-ratelimit-unified-7d-reset": "1784332800",
+        }
+        usage = claude_usage.usage_from_headers(headers)
+        self.assertAlmostEqual(usage["five_hour"]["utilization"], 7.0)
+        self.assertAlmostEqual(usage["seven_day"]["utilization"], 17.0)
+        self.assertEqual(
+            claude_usage.parse_iso_utc(usage["five_hour"]["resets_at"]),
+            datetime.fromtimestamp(1784275200, timezone.utc),
+        )
+
+    def test_missing_headers_default_to_zero(self):
+        usage = claude_usage.usage_from_headers({})
+        self.assertEqual(usage["five_hour"], {"utilization": 0.0, "resets_at": ""})
+        self.assertEqual(usage["seven_day"], {"utilization": 0.0, "resets_at": ""})
+
+    def test_garbage_reset_leaves_empty(self):
+        headers = {
+            "anthropic-ratelimit-unified-5h-utilization": "0.5",
+            "anthropic-ratelimit-unified-5h-reset": "soon",
+        }
+        usage = claude_usage.usage_from_headers(headers)
+        self.assertAlmostEqual(usage["five_hour"]["utilization"], 50.0)
+        self.assertEqual(usage["five_hour"]["resets_at"], "")
+
+
 class DonutB64Tests(unittest.TestCase):
     def test_output_stable(self):
         # Snapshot the donut PNG hash so subtle rendering regressions are caught.
@@ -162,8 +193,6 @@ class MainOutputTests(_TzFixed, unittest.TestCase):
         resp = {
             "five_hour": {"utilization": 7.2, "resets_at": "2026-05-20T01:50:00Z"},
             "seven_day": {"utilization": 43.1, "resets_at": "2026-05-23T00:00:00Z"},
-            "seven_day_sonnet": {"utilization": 0},
-            "seven_day_omelette": {"utilization": 37.4, "resets_at": "2026-05-23T00:00:00Z"},
         }
         out = self._run_main(resp)
         # Reset date is rendered via the user's LC_TIME, so build the
@@ -172,22 +201,8 @@ class MainOutputTests(_TzFixed, unittest.TestCase):
         self.assertIn("7% · 3h44m | image=", out)
         self.assertIn("5-hour session — resets 10:50 (3h44m left)", out)
         self.assertIn(f"Week (all models) — resets {week_reset}", out)
-        self.assertIn("Week (Sonnet only)", out)
-        self.assertNotIn("Week (Opus only)", out)
-        self.assertIn(f"Claude Design — resets {week_reset}", out)
         self.assertIn("Open claude.ai usage | href=https://claude.ai/settings/usage", out)
         self.assertIn("Refresh | refresh=true", out)
-
-    def test_opus_only_section(self):
-        resp = {
-            "five_hour": {"utilization": 0},
-            "seven_day": {"utilization": 0},
-            "seven_day_opus": {"utilization": 12},
-        }
-        out = self._run_main(resp)
-        self.assertIn("Week (Opus only)", out)
-        self.assertNotIn("Week (Sonnet only)", out)
-        self.assertNotIn("Claude Design", out)
 
     def test_high_utilization_colors(self):
         # 5h=95 → red title; week=72 → orange somewhere.

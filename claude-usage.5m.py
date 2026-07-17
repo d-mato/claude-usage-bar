@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # <bitbar.title>Claude Usage</bitbar.title>
-# <bitbar.version>v0.3.0</bitbar.version>
+# <bitbar.version>v0.4.0</bitbar.version>
 # <bitbar.author>daiki</bitbar.author>
-# <bitbar.desc>Shows Claude Code usage (5-hour block and weekly) in the menu bar by calling /api/oauth/usage.</bitbar.desc>
+# <bitbar.desc>Shows Claude Code usage (5-hour block and weekly) in the menu bar by reading anthropic-ratelimit-unified-* headers from a minimal Messages API call.</bitbar.desc>
 # <bitbar.dependencies>python3,security</bitbar.dependencies>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
@@ -23,7 +23,12 @@ from datetime import datetime, timezone
 
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 KEYCHAIN_ACCOUNT = os.environ.get("KEYCHAIN_ACCOUNT") or getpass.getuser()
-USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+# /api/oauth/usage started returning persistent 429s (~1h windows) around
+# 2026-03, so usage is read from the rate-limit headers of a minimal inference
+# call instead. Cheapest available model first; dated fallback in case the
+# alias is ever retired.
+PROBE_MODELS = ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]
 
 
 def emit_error(msg):
@@ -51,27 +56,60 @@ def keychain_credentials():
         emit_error("Keychain entry is not valid JSON")
 
 
+def usage_from_headers(headers):
+    # Normalize anthropic-ratelimit-unified-* headers (0..1 fraction, Unix
+    # seconds) into the same shape /api/oauth/usage used to return (percent,
+    # ISO 8601), so the rendering code below stays unchanged.
+    def block(prefix):
+        util = headers.get(f"anthropic-ratelimit-unified-{prefix}-utilization")
+        reset = headers.get(f"anthropic-ratelimit-unified-{prefix}-reset")
+        resets_at = ""
+        if reset:
+            try:
+                resets_at = datetime.fromtimestamp(int(reset), timezone.utc).isoformat()
+            except (ValueError, OverflowError, OSError):
+                pass
+        return {"utilization": float(util or 0) * 100.0, "resets_at": resets_at}
+
+    return {"five_hour": block("5h"), "seven_day": block("7d")}
+
+
 def fetch_usage(token):
-    req = urllib.request.Request(
-        USAGE_URL,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "anthropic-beta": "oauth-2025-04-20",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            body = resp.read()
-    except urllib.error.HTTPError as e:
-        body = e.read()
-    except (urllib.error.URLError, TimeoutError, OSError):
-        emit_error(f"no response from {USAGE_URL}")
-    if not body:
-        emit_error(f"no response from {USAGE_URL}")
-    try:
-        return json.loads(body)
-    except json.JSONDecodeError:
-        emit_error(f"invalid response from {USAGE_URL}")
+    # Probe the Messages API with a minimal 1-token request (~9 tokens per
+    # poll) and read usage from the rate-limit response headers.
+    err = None
+    for model in PROBE_MODELS:
+        payload = json.dumps({
+            "model": model,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "."}],
+        }).encode()
+        req = urllib.request.Request(
+            MESSAGES_URL,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "anthropic-beta": "oauth-2025-04-20",
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if "anthropic-ratelimit-unified-5h-utilization" not in resp.headers:
+                    emit_error("no ratelimit headers in response")
+                return usage_from_headers(resp.headers)
+        except urllib.error.HTTPError as e:
+            try:
+                err = json.loads(e.read())
+            except json.JSONDecodeError:
+                emit_error(f"HTTP {e.code} from {MESSAGES_URL}")
+            if get(err, "error.type") == "not_found_error":
+                continue  # model retired — try the next one
+            return err
+        except (urllib.error.URLError, TimeoutError, OSError):
+            emit_error(f"no response from {MESSAGES_URL}")
+    return err
 
 
 def get(d, path, default=None):
@@ -210,14 +248,9 @@ def main():
     five_reset = get(resp, "five_hour.resets_at", "")
     week_pct = get(resp, "seven_day.utilization", 0)
     week_reset = get(resp, "seven_day.resets_at", "")
-    week_sonnet = get(resp, "seven_day_sonnet")
-    week_opus = get(resp, "seven_day_opus")
-    week_design_pct = get(resp, "seven_day_omelette.utilization", 0)
-    week_design_reset = get(resp, "seven_day_omelette.resets_at", "")
 
     five_int = round_int(five_pct)
     week_int = round_int(week_pct)
-    week_design_int = round_int(week_design_pct)
 
     five_reset_dt = parse_iso_utc(five_reset)
     now_utc = datetime.now(timezone.utc)
@@ -225,7 +258,6 @@ def main():
     five_remain_txt = fmt_remain(five_remain_secs)
     five_reset_time = iso_to_local(five_reset, "%H:%M")
     week_reset_txt = iso_to_local(week_reset, "%x %H:%M")
-    week_design_reset_txt = iso_to_local(week_design_reset, "%x %H:%M")
 
     five_color = color_for_pct(five_int)
     week_color = color_for_pct(week_int)
@@ -246,20 +278,6 @@ def main():
 
     print(f"Week (all models) — resets {week_reset_txt}")
     print(bar_line(week_int, week_color))
-
-    if week_opus is not None:
-        opus_int = round_int(get(week_opus, "utilization", 0))
-        print("Week (Opus only)")
-        print(f"  {ascii_bar(opus_int)} {opus_int}% | font=Menlo color=gray")
-    if week_sonnet is not None:
-        sonnet_int = round_int(get(week_sonnet, "utilization", 0))
-        print("Week (Sonnet only)")
-        print(f"  {ascii_bar(sonnet_int)} {sonnet_int}% | font=Menlo color=gray")
-
-    if week_design_reset:
-        print("---")
-        print(f"Claude Design — resets {week_design_reset_txt}")
-        print(bar_line(week_design_int, color_for_pct(week_design_int)))
 
     print("---")
     print("Open claude.ai usage | href=https://claude.ai/settings/usage")

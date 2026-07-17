@@ -8,20 +8,21 @@ A SwiftBar plugin that shows your Claude Code usage (5-hour session and weekly) 
 - Middle: utilization as a percentage
 - Right: time remaining until that session resets
 
-Clicking the menu bar item reveals a dropdown with the 5-hour and weekly utilization, reset times, and per-model weekly breakdown. The text turns orange at 70% and red at 90%.
+Clicking the menu bar item reveals a dropdown with the 5-hour and weekly utilization and reset times. The text turns orange at 70% and red at 90%.
 
 ![Dropdown](docs/dropdown.png)
 
 ## How it works
 
-The plugin calls the same internal endpoint `https://api.anthropic.com/api/oauth/usage` that Claude Code's `/usage` slash command uses, so the numbers match `/usage` exactly.
+The plugin sends a minimal request to the Messages API (`POST /v1/messages`, Haiku, `max_tokens: 1`) and reads the current utilization from the `anthropic-ratelimit-unified-*` response headers — the same server-side numbers that back Claude Code's `/usage` command.
 
 - **Auth**: reads the Claude Code OAuth access token from the macOS Keychain entry `Claude Code-credentials` via the `security` command.
 - **Aggregation**: done server-side by Anthropic — no local log parsing.
+- **Cost**: each refresh consumes ~9 Haiku tokens (8 input + 1 output) of your subscription quota — negligible, but not zero.
 - **Dependencies**: `python3`, `security` (both standard on macOS once Xcode Command Line Tools are installed).
 
 > [!NOTE]
-> `/api/oauth/usage` is not a publicly documented API — it's an internal endpoint used by Claude Code. It may change or be removed in future Claude Code releases.
+> Earlier versions called Claude Code's internal `/api/oauth/usage` endpoint, but around March 2026 it began returning persistent 429s (roughly one request per hour is allowed), which defeats the point of a live menu bar gauge ([anthropics/claude-code#31637](https://github.com/anthropics/claude-code/issues/31637)). Reading rate-limit headers off a 1-token inference call is the workaround. Two side effects: per-model weekly breakdowns (Opus/Sonnet) are no longer available, and polling itself keeps a 5-hour usage window open, so a reset time is always shown even when you're otherwise idle.
 
 ## Requirements
 
@@ -62,7 +63,7 @@ Click **Always Allow**. Choosing **Allow** alone will re-prompt every refresh.
 | Location | Content |
 |---|---|
 | Menu bar | `37% · 2h24m` (5-hour session utilization + time remaining) |
-| Dropdown | 5-hour session and weekly utilization (all models / Opus / Sonnet), reset times |
+| Dropdown | 5-hour session and weekly utilization, reset times |
 
 ## Troubleshooting
 
@@ -75,6 +76,8 @@ Click **Always Allow**. Choosing **Allow** alone will re-prompt every refresh.
 
 - **v0.1**: aggregated local logs via `ccusage`. Retired because its numbers drifted tens of percent from the official `/usage`.
 - **v0.2**: switched to calling the official `/api/oauth/usage` endpoint directly.
+- **v0.3**: rewrote the plugin in Python to drop the `jq` dependency.
+- **v0.4**: switched to reading `anthropic-ratelimit-unified-*` headers from a 1-token Messages API call, after `/api/oauth/usage` became too aggressively rate limited to poll.
 
 ## License
 
