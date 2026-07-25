@@ -1,34 +1,41 @@
 #!/usr/bin/env python3
 # <bitbar.title>Claude Usage</bitbar.title>
-# <bitbar.version>v0.4.0</bitbar.version>
+# <bitbar.version>v0.5.0</bitbar.version>
 # <bitbar.author>daiki</bitbar.author>
-# <bitbar.desc>Shows Claude Code usage (5-hour block and weekly) in the menu bar by reading anthropic-ratelimit-unified-* headers from a minimal Messages API call.</bitbar.desc>
-# <bitbar.dependencies>python3,security</bitbar.dependencies>
+# <bitbar.desc>Shows Claude Code usage (5-hour block, weekly, per-model weekly, usage credits) in the menu bar via the Claude Code get_usage control request.</bitbar.desc>
+# <bitbar.dependencies>python3,claude</bitbar.dependencies>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 
 import base64
-import getpass
 import json
 import locale
 import math
 import os
+import shutil
 import struct
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 import zlib
 from datetime import datetime, timezone
 
-KEYCHAIN_SERVICE = "Claude Code-credentials"
-KEYCHAIN_ACCOUNT = os.environ.get("KEYCHAIN_ACCOUNT") or getpass.getuser()
-MESSAGES_URL = "https://api.anthropic.com/v1/messages"
-# /api/oauth/usage started returning persistent 429s (~1h windows) around
-# 2026-03, so usage is read from the rate-limit headers of a minimal inference
-# call instead. Cheapest available model first; dated fallback in case the
-# alias is ever retired.
-PROBE_MODELS = ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]
+# Usage is read from the Claude Code CLI itself: a `get_usage` control request
+# over its stream-json interface returns the same account-wide numbers that
+# back `/usage`, including per-model weekly windows and usage credits, with
+# zero inference tokens. See issue #2 for the investigation that led here.
+REQUEST_ID = "claude-usage-bar"
+GET_USAGE_REQUEST = json.dumps({
+    "type": "control_request",
+    "request_id": REQUEST_ID,
+    "request": {"subtype": "get_usage"},
+}) + "\n"
+# SwiftBar runs plugins with a minimal PATH, so fall back to the usual
+# install locations when `claude` isn't found on it.
+CLAUDE_CANDIDATES = [
+    os.path.expanduser("~/.local/bin/claude"),
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+]
 
 
 def emit_error(msg):
@@ -39,77 +46,56 @@ def emit_error(msg):
     sys.exit(0)
 
 
-def keychain_credentials():
-    try:
-        out = subprocess.run(
-            ["security", "find-generic-password",
-             "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-    except FileNotFoundError:
-        emit_error("security CLI not found")
-    except subprocess.CalledProcessError:
-        emit_error(f"Keychain access denied or no entry for {KEYCHAIN_SERVICE}/{KEYCHAIN_ACCOUNT}")
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        emit_error("Keychain entry is not valid JSON")
+def find_claude():
+    override = os.environ.get("CLAUDE_BIN")
+    if override:
+        return override
+    found = shutil.which("claude")
+    if found:
+        return found
+    for candidate in CLAUDE_CANDIDATES:
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
-def usage_from_headers(headers):
-    # Normalize anthropic-ratelimit-unified-* headers (0..1 fraction, Unix
-    # seconds) into the same shape /api/oauth/usage used to return (percent,
-    # ISO 8601), so the rendering code below stays unchanged.
-    def block(prefix):
-        util = headers.get(f"anthropic-ratelimit-unified-{prefix}-utilization")
-        reset = headers.get(f"anthropic-ratelimit-unified-{prefix}-reset")
-        resets_at = ""
-        if reset:
-            try:
-                resets_at = datetime.fromtimestamp(int(reset), timezone.utc).isoformat()
-            except (ValueError, OverflowError, OSError):
-                pass
-        return {"utilization": float(util or 0) * 100.0, "resets_at": resets_at}
-
-    return {"five_hour": block("5h"), "seven_day": block("7d")}
-
-
-def fetch_usage(token):
-    # Probe the Messages API with a minimal 1-token request (~9 tokens per
-    # poll) and read usage from the rate-limit response headers.
-    err = None
-    for model in PROBE_MODELS:
-        payload = json.dumps({
-            "model": model,
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "."}],
-        }).encode()
-        req = urllib.request.Request(
-            MESSAGES_URL,
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "anthropic-beta": "oauth-2025-04-20",
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-        )
+def parse_usage_response(stdout):
+    # The CLI emits one JSON object per line; pick out the control_response
+    # matching our request_id. Returns the inner response dict
+    # ({"subtype": ..., "response": {...}}) or None if it never arrived.
+    for line in stdout.splitlines():
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                if "anthropic-ratelimit-unified-5h-utilization" not in resp.headers:
-                    emit_error("no ratelimit headers in response")
-                return usage_from_headers(resp.headers)
-        except urllib.error.HTTPError as e:
-            try:
-                err = json.loads(e.read())
-            except json.JSONDecodeError:
-                emit_error(f"HTTP {e.code} from {MESSAGES_URL}")
-            if get(err, "error.type") == "not_found_error":
-                continue  # model retired — try the next one
-            return err
-        except (urllib.error.URLError, TimeoutError, OSError):
-            emit_error(f"no response from {MESSAGES_URL}")
-    return err
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(msg, dict) or msg.get("type") != "control_response":
+            continue
+        resp = msg.get("response") or {}
+        if resp.get("request_id") == REQUEST_ID:
+            return resp
+    return None
+
+
+def fetch_usage(claude_bin):
+    try:
+        proc = subprocess.run(
+            [claude_bin, "-p",
+             "--input-format", "stream-json",
+             "--output-format", "stream-json",
+             "--verbose"],
+            input=GET_USAGE_REQUEST,
+            capture_output=True, text=True, timeout=60,
+        )
+    except FileNotFoundError:
+        emit_error(f"claude CLI not found at {claude_bin}")
+    except subprocess.TimeoutExpired:
+        emit_error("get_usage timed out after 60s")
+    resp = parse_usage_response(proc.stdout)
+    if resp is None:
+        emit_error(f"no get_usage response from claude (exit {proc.returncode})")
+    if resp.get("subtype") != "success":
+        emit_error(f"get_usage failed: {resp.get('error') or resp.get('subtype')}")
+    return resp.get("response") or {}
 
 
 def get(d, path, default=None):
@@ -119,6 +105,42 @@ def get(d, path, default=None):
             return default
         cur = cur[k]
     return cur
+
+
+def scoped_limits(rl):
+    # Per-model weekly windows (e.g. Fable), server-labeled and pre-filtered.
+    rows = []
+    for entry in rl.get("model_scoped") or []:
+        if not isinstance(entry, dict):
+            continue
+        rows.append({
+            "name": entry.get("display_name") or "Model",
+            "percent": entry.get("utilization") or 0,
+            "resets_at": entry.get("resets_at") or "",
+        })
+    return rows
+
+
+def fmt_money(minor, exponent=2):
+    return f"${minor / (10 ** exponent):.{exponent}f}"
+
+
+def spend_info(rl):
+    # Usage credits (pay-as-you-go beyond plan limits). Hidden while the
+    # account has never spent anything and credits are disabled.
+    spend = rl.get("spend")
+    if not isinstance(spend, dict):
+        return None
+    used_minor = get(spend, "used.amount_minor")
+    if not spend.get("enabled") and not used_minor:
+        return None
+    exponent = get(spend, "used.exponent", 2)
+    limit_minor = get(spend, "limit.amount_minor")
+    return {
+        "used": fmt_money(used_minor or 0, exponent),
+        "limit": fmt_money(limit_minor, get(spend, "limit.exponent", 2)) if limit_minor is not None else None,
+        "percent": spend.get("percent") or 0,
+    }
 
 
 def round_int(n):
@@ -228,26 +250,19 @@ def main():
     except locale.Error:
         pass
 
-    cred = keychain_credentials()
-    oauth = cred.get("claudeAiOauth") or {}
-    token = oauth.get("accessToken")
-    if not token:
-        emit_error("no accessToken in Keychain entry")
+    claude_bin = find_claude()
+    if not claude_bin:
+        emit_error("claude CLI not found — install Claude Code or set CLAUDE_BIN")
 
-    expires_at_ms = oauth.get("expiresAt") or 0
-    now_ms = int(datetime.now().timestamp() * 1000)
-    if expires_at_ms and expires_at_ms < now_ms:
-        emit_error("OAuth token expired — run 'claude' to re-login")
+    data = fetch_usage(claude_bin)
+    rl = data.get("rate_limits")
+    if not isinstance(rl, dict):
+        emit_error("no rate_limits in get_usage response (API billing account?)")
 
-    resp = fetch_usage(token)
-    err_type = get(resp, "error.type")
-    if err_type:
-        emit_error(f"API error: {err_type}")
-
-    five_pct = get(resp, "five_hour.utilization", 0)
-    five_reset = get(resp, "five_hour.resets_at", "")
-    week_pct = get(resp, "seven_day.utilization", 0)
-    week_reset = get(resp, "seven_day.resets_at", "")
+    five_pct = get(rl, "five_hour.utilization", 0)
+    five_reset = get(rl, "five_hour.resets_at", "")
+    week_pct = get(rl, "seven_day.utilization", 0)
+    week_reset = get(rl, "seven_day.resets_at", "")
 
     five_int = round_int(five_pct)
     week_int = round_int(week_pct)
@@ -278,6 +293,19 @@ def main():
 
     print(f"Week (all models) — resets {week_reset_txt}")
     print(bar_line(week_int, week_color))
+
+    for row in scoped_limits(rl):
+        pct = round_int(row["percent"])
+        print(f"{row['name']} — resets {iso_to_local(row['resets_at'], '%x %H:%M')}")
+        print(bar_line(pct, color_for_pct(pct)))
+
+    spend = spend_info(rl)
+    if spend:
+        pct = round_int(spend["percent"])
+        limit_txt = f" / {spend['limit']}" if spend["limit"] else ""
+        print("---")
+        print(f"Usage credits — {spend['used']}{limit_txt}")
+        print(bar_line(pct, color_for_pct(pct)))
 
     print("---")
     print("Open claude.ai usage | href=https://claude.ai/settings/usage")
