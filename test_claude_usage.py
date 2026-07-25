@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import json
 import locale
 import os
 import time
@@ -16,6 +17,39 @@ _spec = importlib.util.spec_from_file_location(
 )
 claude_usage = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(claude_usage)
+
+
+def usage_data(**rl_overrides):
+    """A realistic get_usage control-response payload (2026-07-25 shape).
+
+    Everything usage-related — including model_scoped and spend — nests
+    inside rate_limits; keyword overrides apply at that level.
+    """
+    rl = {
+        "five_hour": {"utilization": 7.2, "resets_at": "2026-05-20T01:50:00+00:00"},
+        "seven_day": {"utilization": 43.1, "resets_at": "2026-05-23T00:00:00+00:00"},
+        "model_scoped": [],
+        "spend": {
+            "used": {"amount_minor": 0, "currency": "USD", "exponent": 2},
+            "limit": {"amount_minor": 20000, "currency": "USD", "exponent": 2},
+            "percent": 0,
+            "enabled": False,
+            "disabled_reason": "out_of_credits",
+        },
+    }
+    rl.update(rl_overrides)
+    return {"rate_limits_available": True, "rate_limits": rl}
+
+
+def control_response_line(inner, request_id=None, subtype="success"):
+    return json.dumps({
+        "type": "control_response",
+        "response": {
+            "subtype": subtype,
+            "request_id": request_id or claude_usage.REQUEST_ID,
+            "response": inner,
+        },
+    })
 
 
 class RoundIntTests(unittest.TestCase):
@@ -119,35 +153,87 @@ class GetTests(unittest.TestCase):
         self.assertIsNone(claude_usage.get({"a": "x"}, "a.b"))
 
 
-class UsageFromHeadersTests(unittest.TestCase):
-    def test_typical_headers(self):
-        headers = {
-            "anthropic-ratelimit-unified-5h-utilization": "0.07",
-            "anthropic-ratelimit-unified-5h-reset": "1784275200",
-            "anthropic-ratelimit-unified-7d-utilization": "0.17",
-            "anthropic-ratelimit-unified-7d-reset": "1784332800",
-        }
-        usage = claude_usage.usage_from_headers(headers)
-        self.assertAlmostEqual(usage["five_hour"]["utilization"], 7.0)
-        self.assertAlmostEqual(usage["seven_day"]["utilization"], 17.0)
-        self.assertEqual(
-            claude_usage.parse_iso_utc(usage["five_hour"]["resets_at"]),
-            datetime.fromtimestamp(1784275200, timezone.utc),
-        )
+class ParseUsageResponseTests(unittest.TestCase):
+    def test_picks_matching_control_response(self):
+        stdout = "\n".join([
+            json.dumps({"type": "system", "subtype": "init"}),
+            control_response_line({"rate_limits": {}}),
+        ])
+        resp = claude_usage.parse_usage_response(stdout)
+        self.assertEqual(resp["subtype"], "success")
+        self.assertEqual(resp["response"], {"rate_limits": {}})
 
-    def test_missing_headers_default_to_zero(self):
-        usage = claude_usage.usage_from_headers({})
-        self.assertEqual(usage["five_hour"], {"utilization": 0.0, "resets_at": ""})
-        self.assertEqual(usage["seven_day"], {"utilization": 0.0, "resets_at": ""})
+    def test_ignores_other_request_ids(self):
+        stdout = control_response_line({}, request_id="someone-else")
+        self.assertIsNone(claude_usage.parse_usage_response(stdout))
 
-    def test_garbage_reset_leaves_empty(self):
-        headers = {
-            "anthropic-ratelimit-unified-5h-utilization": "0.5",
-            "anthropic-ratelimit-unified-5h-reset": "soon",
-        }
-        usage = claude_usage.usage_from_headers(headers)
-        self.assertAlmostEqual(usage["five_hour"]["utilization"], 50.0)
-        self.assertEqual(usage["five_hour"]["resets_at"], "")
+    def test_ignores_non_json_lines(self):
+        stdout = "warning: something\n" + control_response_line({"x": 1})
+        self.assertEqual(claude_usage.parse_usage_response(stdout)["response"], {"x": 1})
+
+    def test_empty_stdout(self):
+        self.assertIsNone(claude_usage.parse_usage_response(""))
+
+    def test_error_subtype_passed_through(self):
+        stdout = control_response_line(None, subtype="error")
+        self.assertEqual(claude_usage.parse_usage_response(stdout)["subtype"], "error")
+
+
+class ScopedLimitsTests(unittest.TestCase):
+    def test_empty_when_absent(self):
+        self.assertEqual(claude_usage.scoped_limits({}), [])
+        self.assertEqual(claude_usage.scoped_limits({"model_scoped": None}), [])
+
+    def test_typical_entry(self):
+        data = {"model_scoped": [
+            {"display_name": "Fable", "utilization": 4, "resets_at": "2026-07-31T23:59:59+00:00"},
+        ]}
+        self.assertEqual(claude_usage.scoped_limits(data), [
+            {"name": "Fable", "percent": 4, "resets_at": "2026-07-31T23:59:59+00:00"},
+        ])
+
+    def test_missing_fields_get_defaults(self):
+        self.assertEqual(claude_usage.scoped_limits({"model_scoped": [{}]}), [
+            {"name": "Model", "percent": 0, "resets_at": ""},
+        ])
+
+    def test_non_dict_entries_skipped(self):
+        self.assertEqual(claude_usage.scoped_limits({"model_scoped": ["junk"]}), [])
+
+
+class FmtMoneyTests(unittest.TestCase):
+    def test_dollars(self): self.assertEqual(claude_usage.fmt_money(20000), "$200.00")
+    def test_zero(self): self.assertEqual(claude_usage.fmt_money(0), "$0.00")
+    def test_cents(self): self.assertEqual(claude_usage.fmt_money(137), "$1.37")
+    def test_exponent_zero(self): self.assertEqual(claude_usage.fmt_money(5, 0), "$5")
+
+
+class SpendInfoTests(unittest.TestCase):
+    def test_hidden_while_disabled_and_unused(self):
+        self.assertIsNone(claude_usage.spend_info(usage_data()["rate_limits"]))
+
+    def test_missing_spend(self):
+        self.assertIsNone(claude_usage.spend_info({}))
+
+    def test_shown_when_enabled(self):
+        rl = usage_data()["rate_limits"]
+        rl["spend"]["enabled"] = True
+        info = claude_usage.spend_info(rl)
+        self.assertEqual(info, {"used": "$0.00", "limit": "$200.00", "percent": 0})
+
+    def test_shown_when_used_despite_disabled(self):
+        rl = usage_data()["rate_limits"]
+        rl["spend"]["used"]["amount_minor"] = 1337
+        rl["spend"]["percent"] = 7
+        info = claude_usage.spend_info(rl)
+        self.assertEqual(info["used"], "$13.37")
+        self.assertEqual(info["percent"], 7)
+
+    def test_no_limit(self):
+        rl = usage_data()["rate_limits"]
+        rl["spend"]["enabled"] = True
+        rl["spend"]["limit"] = None
+        self.assertIsNone(claude_usage.spend_info(rl)["limit"])
 
 
 class DonutB64Tests(unittest.TestCase):
@@ -158,6 +244,29 @@ class DonutB64Tests(unittest.TestCase):
             hashlib.sha256(b64.encode()).hexdigest(),
             "770fa5844123ef0a2415ce36dc4d4c16e204cec3439f16d4ac93ede24e6ad790",
         )
+
+
+class FetchUsageTests(unittest.TestCase):
+    def _run(self, stdout, returncode=0):
+        proc = mock.Mock(stdout=stdout, returncode=returncode)
+        with mock.patch.object(claude_usage.subprocess, "run", return_value=proc):
+            return claude_usage.fetch_usage("/fake/claude")
+
+    def test_success(self):
+        data = usage_data()
+        self.assertEqual(self._run(control_response_line(data)), data)
+
+    def test_no_response_emits_error(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):
+            self._run("", returncode=1)
+        self.assertIn("no get_usage response from claude (exit 1)", buf.getvalue())
+
+    def test_error_subtype_emits_error(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):
+            self._run(control_response_line(None, subtype="error"))
+        self.assertIn("get_usage failed", buf.getvalue())
 
 
 class MainOutputTests(_TzFixed, unittest.TestCase):
@@ -172,13 +281,12 @@ class MainOutputTests(_TzFixed, unittest.TestCase):
         locale.setlocale(locale.LC_TIME, self._orig_locale)
         super().tearDown()
 
-    def _run_main(self, resp, *, expires_at_ms=2 ** 63 - 1, now=None):
+    def _run_main(self, data, *, now=None):
         if now is None:
             now = datetime(2026, 5, 19, 22, 6, tzinfo=timezone.utc)
         real_dt = claude_usage.datetime
-        cred = {"claudeAiOauth": {"accessToken": "x", "expiresAt": expires_at_ms}}
-        with mock.patch.object(claude_usage, "keychain_credentials", return_value=cred), \
-             mock.patch.object(claude_usage, "fetch_usage", return_value=resp), \
+        with mock.patch.object(claude_usage, "find_claude", return_value="/fake/claude"), \
+             mock.patch.object(claude_usage, "fetch_usage", return_value=data), \
              mock.patch.object(claude_usage, "datetime", wraps=real_dt) as mock_dt:
             mock_dt.now = mock.Mock(return_value=now)
             buf = io.StringIO()
@@ -190,11 +298,7 @@ class MainOutputTests(_TzFixed, unittest.TestCase):
         return buf.getvalue()
 
     def test_typical_output(self):
-        resp = {
-            "five_hour": {"utilization": 7.2, "resets_at": "2026-05-20T01:50:00Z"},
-            "seven_day": {"utilization": 43.1, "resets_at": "2026-05-23T00:00:00Z"},
-        }
-        out = self._run_main(resp)
+        out = self._run_main(usage_data())
         # Reset date is rendered via the user's LC_TIME, so build the
         # expectation through strftime instead of hard-coding a format.
         week_reset = datetime(2026, 5, 23, 9, 0).strftime("%x %H:%M")
@@ -203,25 +307,40 @@ class MainOutputTests(_TzFixed, unittest.TestCase):
         self.assertIn(f"Week (all models) — resets {week_reset}", out)
         self.assertIn("Open claude.ai usage | href=https://claude.ai/settings/usage", out)
         self.assertIn("Refresh | refresh=true", out)
+        # Credits disabled + unused, no scoped models → neither section renders.
+        self.assertNotIn("Usage credits", out)
+        self.assertNotIn("Fable", out)
 
     def test_high_utilization_colors(self):
         # 5h=95 → red title; week=72 → orange somewhere.
-        resp = {
-            "five_hour": {"utilization": 95, "resets_at": "2026-05-20T01:50:00Z"},
-            "seven_day": {"utilization": 72, "resets_at": "2026-05-23T00:00:00Z"},
-        }
-        out = self._run_main(resp)
+        data = usage_data(
+            five_hour={"utilization": 95, "resets_at": "2026-05-20T01:50:00+00:00"},
+            seven_day={"utilization": 72, "resets_at": "2026-05-23T00:00:00+00:00"},
+        )
+        out = self._run_main(data)
         self.assertIn("color=red", out)
         self.assertIn("color=orange", out)
 
-    def test_api_error_short_circuits(self):
-        out = self._run_main({"error": {"type": "rate_limited"}})
-        self.assertIn("Claude ⚠️", out)
-        self.assertIn("API error: rate_limited", out)
+    def test_scoped_limit_renders(self):
+        data = usage_data(model_scoped=[
+            {"display_name": "Fable", "utilization": 4, "resets_at": "2026-05-23T00:00:00+00:00"},
+        ])
+        out = self._run_main(data)
+        reset = datetime(2026, 5, 23, 9, 0).strftime("%x %H:%M")
+        self.assertIn(f"Fable — resets {reset}", out)
+        self.assertIn("4%", out)
 
-    def test_expired_token_short_circuits(self):
-        out = self._run_main({}, expires_at_ms=1)
-        self.assertIn("OAuth token expired", out)
+    def test_spend_renders_when_used(self):
+        data = usage_data()
+        data["rate_limits"]["spend"]["used"]["amount_minor"] = 1337
+        data["rate_limits"]["spend"]["percent"] = 7
+        out = self._run_main(data)
+        self.assertIn("Usage credits — $13.37 / $200.00", out)
+
+    def test_missing_rate_limits_short_circuits(self):
+        out = self._run_main({"rate_limits_available": False})
+        self.assertIn("Claude ⚠️", out)
+        self.assertIn("no rate_limits in get_usage response", out)
 
 
 if __name__ == "__main__":
