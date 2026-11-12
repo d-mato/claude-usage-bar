@@ -77,14 +77,17 @@ def parse_usage_response(stdout):
 
 
 def fetch_usage(claude_bin):
+    # get_usage needs no MCP, so don't connect to any server on every poll.
     try:
         proc = subprocess.run(
             [claude_bin, "-p",
              "--input-format", "stream-json",
              "--output-format", "stream-json",
-             "--verbose"],
+             "--verbose",
+             "--strict-mcp-config"],
             input=GET_USAGE_REQUEST,
             capture_output=True, text=True, timeout=60,
+            env={**os.environ, "ENABLE_CLAUDEAI_MCP_SERVERS": "false"},
         )
     except FileNotFoundError:
         emit_error(f"claude CLI not found at {claude_bin}")

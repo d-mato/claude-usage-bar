@@ -19,6 +19,7 @@ The plugin asks the local Claude Code CLI for usage via its stream-json control 
 - **Auth**: handled entirely by the Claude Code CLI — the plugin never touches your OAuth token or the Keychain.
 - **Aggregation**: done server-side by Anthropic — account-wide across all your machines, no local log parsing.
 - **Cost**: zero — `get_usage` is a control request, no inference involved.
+- **MCP servers**: none are started — your MCP servers and claude.ai connectors are skipped.
 - **Dependencies**: `python3` (from Xcode Command Line Tools) and the `claude` CLI.
 
 > [!NOTE]
