@@ -19,9 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.9 is the floor: macOS ships 3.9.6, which is what SwiftBar
-        # typically ends up running the plugin with.
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -31,9 +29,11 @@ jobs:
 
   test-macos:
     # The plugin actually runs on macOS under the system interpreter, so
-    # exercise that exact combination rather than a managed Python.
+    # exercise that exact combination rather than a managed Python. It is
+    # also the only job that covers the old Python version macOS ships.
     name: test (macOS system python)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+      - run: /usr/bin/python3 --version
       - run: /usr/bin/python3 -m unittest test_claude_usage.py -v
